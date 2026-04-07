@@ -32,6 +32,7 @@ log = logging.getLogger('polywatch-api')
 
 POLY_KEY = os.getenv('POLY_KEY', '')
 API_TOKEN = os.getenv('API_TOKEN', '')
+ANTHROPIC_API_KEY = os.getenv('ANTHROPIC_API_KEY', '')
 POLYGON_RPC = os.getenv('POLYGON_RPC', 'https://polygon-rpc.com')
 USDC_ADDRESS_STR = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'
 USDC_ABI = '[{"inputs":[{"name":"to","type":"address"},{"name":"amount","type":"uint256"}],"name":"transfer","outputs":[{"name":"","type":"bool"}],"type":"function"}]'
@@ -70,6 +71,50 @@ PROXY_MAP = {
     'value':            'https://data-api.polymarket.com/value',
     'markets':          'https://gamma-api.polymarket.com/markets',
 }
+
+
+@app.route('/proxy/claude', methods=['POST'])
+def proxy_claude():
+    """Proxy to Anthropic messages API using server-side ANTHROPIC_API_KEY.
+    Body: {"prompt": "...", "max_tokens": 120, "model": "claude-sonnet-4-20250514"}
+    Returns: {"text": "..."} on success, or {"error": "..."} on failure.
+    """
+    if not ANTHROPIC_API_KEY:
+        return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
+    try:
+        body = request.get_json(force=True, silent=True) or {}
+        prompt = body.get('prompt', '')
+        if not prompt:
+            return jsonify({'error': 'prompt required'}), 400
+        model = body.get('model', 'claude-sonnet-4-20250514')
+        max_tokens = int(body.get('max_tokens', 150))
+        r = requests.post(
+            'https://api.anthropic.com/v1/messages',
+            headers={
+                'Content-Type': 'application/json',
+                'x-api-key': ANTHROPIC_API_KEY,
+                'anthropic-version': '2023-06-01',
+            },
+            json={
+                'model': model,
+                'max_tokens': max_tokens,
+                'messages': [{'role': 'user', 'content': prompt}],
+            },
+            timeout=30,
+        )
+        if r.status_code != 200:
+            log.warning('anthropic %d: %s', r.status_code, r.text[:200])
+            return jsonify({'error': f'anthropic {r.status_code}', 'detail': r.text[:300]}), 502
+        j = r.json()
+        text = ''
+        if isinstance(j.get('content'), list) and j['content']:
+            text = j['content'][0].get('text', '')
+        return jsonify({'text': text or 'Analysis unavailable'}), 200
+    except requests.exceptions.Timeout:
+        return jsonify({'error': 'anthropic timeout'}), 504
+    except Exception as e:
+        log.exception('claude proxy failed')
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/proxy/<endpoint>', methods=['GET'])
