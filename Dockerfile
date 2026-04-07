@@ -14,8 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY polywatch-api.py .
 
-ENV PORT=8080
-EXPOSE 8080
-
-# Gunicorn: 2 workers, 60s timeout (trade + tx signing can be slow)
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 2 --timeout 60 polywatch-api:app"]
+# Railway injects PORT at runtime. Do NOT hardcode it with ENV.
+# Gunicorn: 1 worker (low memory), 120s request timeout, 120s worker boot timeout.
+# Shell form so $PORT is expanded at container start.
+CMD gunicorn --bind 0.0.0.0:${PORT:-8080} --workers 1 --timeout 120 --graceful-timeout 30 --access-logfile - --error-logfile - polywatch-api:app
