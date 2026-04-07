@@ -76,7 +76,12 @@ PROXY_MAP = {
 @app.route('/proxy/claude', methods=['POST'])
 def proxy_claude():
     """Proxy to Anthropic messages API using server-side ANTHROPIC_API_KEY.
-    Body: {"prompt": "...", "max_tokens": 120, "model": "claude-sonnet-4-20250514"}
+    Body: {
+      "prompt": "...",
+      "max_tokens": 400,
+      "model": "claude-sonnet-4-20250514",
+      "web_search": true  // enables server-side web_search tool
+    }
     Returns: {"text": "..."} on success, or {"error": "..."} on failure.
     """
     if not ANTHROPIC_API_KEY:
@@ -87,7 +92,21 @@ def proxy_claude():
         if not prompt:
             return jsonify({'error': 'prompt required'}), 400
         model = body.get('model', 'claude-sonnet-4-20250514')
-        max_tokens = int(body.get('max_tokens', 150))
+        max_tokens = int(body.get('max_tokens', 400))
+        web_search = bool(body.get('web_search', True))
+
+        payload = {
+            'model': model,
+            'max_tokens': max_tokens,
+            'messages': [{'role': 'user', 'content': prompt}],
+        }
+        if web_search:
+            payload['tools'] = [{
+                'type': 'web_search_20250305',
+                'name': 'web_search',
+                'max_uses': 3,
+            }]
+
         r = requests.post(
             'https://api.anthropic.com/v1/messages',
             headers={
@@ -95,20 +114,22 @@ def proxy_claude():
                 'x-api-key': ANTHROPIC_API_KEY,
                 'anthropic-version': '2023-06-01',
             },
-            json={
-                'model': model,
-                'max_tokens': max_tokens,
-                'messages': [{'role': 'user', 'content': prompt}],
-            },
-            timeout=30,
+            json=payload,
+            timeout=45,  # web_search adds latency
         )
         if r.status_code != 200:
-            log.warning('anthropic %d: %s', r.status_code, r.text[:200])
-            return jsonify({'error': f'anthropic {r.status_code}', 'detail': r.text[:300]}), 502
+            log.warning('anthropic %d: %s', r.status_code, r.text[:300])
+            return jsonify({'error': f'anthropic {r.status_code}', 'detail': r.text[:400]}), 502
         j = r.json()
-        text = ''
-        if isinstance(j.get('content'), list) and j['content']:
-            text = j['content'][0].get('text', '')
+        # With web_search, response contains multiple content blocks.
+        # Concatenate all "text" blocks (skip server_tool_use / web_search_tool_result).
+        text_parts = []
+        for block in j.get('content', []) or []:
+            if isinstance(block, dict) and block.get('type') == 'text':
+                t = block.get('text', '').strip()
+                if t:
+                    text_parts.append(t)
+        text = '\n\n'.join(text_parts).strip()
         return jsonify({'text': text or 'Analysis unavailable'}), 200
     except requests.exceptions.Timeout:
         return jsonify({'error': 'anthropic timeout'}), 504
