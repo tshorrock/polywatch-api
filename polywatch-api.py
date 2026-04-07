@@ -62,11 +62,13 @@ def cors_preflight(endpoint=None, _any=None):
 # ---------- Polymarket proxy ----------
 # Maps path → upstream base URL. Forwards all query params, returns JSON + CORS.
 PROXY_MAP = {
-    'leaderboard': 'https://data-api.polymarket.com/v1/leaderboard',
-    'activity':    'https://data-api.polymarket.com/activity',
-    'trades':      'https://data-api.polymarket.com/trades',
-    'positions':   'https://data-api.polymarket.com/positions',
-    'markets':     'https://gamma-api.polymarket.com/markets',
+    'leaderboard':      'https://data-api.polymarket.com/v1/leaderboard',
+    'activity':         'https://data-api.polymarket.com/activity',
+    'trades':           'https://data-api.polymarket.com/trades',
+    'positions':        'https://data-api.polymarket.com/positions',
+    'closed-positions': 'https://data-api.polymarket.com/closed-positions',
+    'value':            'https://data-api.polymarket.com/value',
+    'markets':          'https://gamma-api.polymarket.com/markets',
 }
 
 
