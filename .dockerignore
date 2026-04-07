@@ -1,0 +1,11 @@
+.env
+.env.*
+__pycache__
+*.pyc
+.git
+.DS_Store
+server.py
+execute_trade.py
+withdraw.py
+polywatch-n8n-final.json
+polywatch-setup-guide.md
