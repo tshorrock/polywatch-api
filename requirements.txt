@@ -3,3 +3,4 @@ gunicorn==22.0.0
 python-dotenv==1.0.1
 py-clob-client>=0.22.0
 web3>=7.0.0
+requests>=2.31.0

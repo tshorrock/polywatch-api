@@ -6,6 +6,8 @@ Deployed to Railway as a separate service so n8n (also on Railway) can call it.
 Endpoints:
   GET  /           → liveness (for Railway root healthcheck)
   GET  /healthz    → liveness (JSON)
+  GET  /proxy/<endpoint>  → CORS-enabled proxy for Polymarket APIs
+                            (leaderboard, activity, trades, positions, markets)
   POST /execute-trade  body: JSON signal (approvedUsdc, token_id, price, side, outcome, market)
   POST /withdraw       body: {"amount": float, "to_address": "0x..."}
 
@@ -19,7 +21,8 @@ import os
 import logging
 from functools import wraps
 
-from flask import Flask, request, jsonify
+import requests
+from flask import Flask, request, jsonify, Response
 
 # Heavy deps (py_clob_client, web3) are imported lazily inside functions so
 # gunicorn workers boot instantly and the healthcheck responds immediately.
@@ -38,6 +41,51 @@ if not POLY_KEY:
 
 app = Flask(__name__)
 log.info('polywatch-api initialized (POLY_KEY set: %s, API_TOKEN set: %s)', bool(POLY_KEY), bool(API_TOKEN))
+
+
+# ---------- CORS ----------
+@app.after_request
+def add_cors_headers(resp):
+    resp.headers['Access-Control-Allow-Origin'] = '*'
+    resp.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    resp.headers['Access-Control-Allow-Headers'] = 'Content-Type, X-API-Token'
+    resp.headers['Access-Control-Max-Age'] = '86400'
+    return resp
+
+
+@app.route('/proxy/<path:endpoint>', methods=['OPTIONS'])
+@app.route('/<path:_any>', methods=['OPTIONS'])
+def cors_preflight(endpoint=None, _any=None):
+    return ('', 204)
+
+
+# ---------- Polymarket proxy ----------
+# Maps path → upstream base URL. Forwards all query params, returns JSON + CORS.
+PROXY_MAP = {
+    'leaderboard': 'https://data-api.polymarket.com/v1/leaderboard',
+    'activity':    'https://data-api.polymarket.com/activity',
+    'trades':      'https://data-api.polymarket.com/trades',
+    'positions':   'https://data-api.polymarket.com/positions',
+    'markets':     'https://gamma-api.polymarket.com/markets',
+}
+
+
+@app.route('/proxy/<endpoint>', methods=['GET'])
+def proxy(endpoint):
+    upstream = PROXY_MAP.get(endpoint)
+    if not upstream:
+        return jsonify({'error': 'unknown proxy endpoint', 'available': list(PROXY_MAP.keys())}), 404
+    try:
+        r = requests.get(upstream, params=request.args.to_dict(flat=False), timeout=15)
+        # Forward upstream status code and body as JSON if possible, otherwise raw text
+        ctype = r.headers.get('Content-Type', 'application/json')
+        return Response(r.content, status=r.status_code, content_type=ctype)
+    except requests.exceptions.Timeout:
+        log.warning('proxy timeout: %s', upstream)
+        return jsonify({'error': 'upstream timeout', 'upstream': upstream}), 504
+    except Exception as e:
+        log.exception('proxy failed for %s', endpoint)
+        return jsonify({'error': str(e), 'upstream': upstream}), 502
 
 # Lazily initialized singletons
 _clob_client = None
