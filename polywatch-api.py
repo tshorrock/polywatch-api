@@ -73,17 +73,30 @@ PROXY_MAP = {
 }
 
 
+# In-memory rate limiter for /proxy/claude — max 20 calls per hour, module-level
+_claude_call_timestamps = []
+
+
 @app.route('/proxy/claude', methods=['POST'])
 def proxy_claude():
     """Proxy to Anthropic messages API using server-side ANTHROPIC_API_KEY.
     Body: {
       "prompt": "...",
       "max_tokens": 400,
-      "model": "claude-sonnet-4-20250514",
-      "web_search": true  // enables server-side web_search tool
+      "model": "claude-haiku-4-5-20251001",
+      "web_search": false  // opt in per-request; defaults off for cost control
     }
     Returns: {"text": "..."} on success, or {"error": "..."} on failure.
     """
+    # --- Rate limit: 20 calls per rolling hour ---
+    import time as _time
+    now_ts = _time.time()
+    # Purge entries older than 3600s
+    _claude_call_timestamps[:] = [t for t in _claude_call_timestamps if now_ts - t < 3600]
+    if len(_claude_call_timestamps) >= 20:
+        return jsonify({'error': 'rate limit exceeded', 'limit': '20/hour'}), 429
+    _claude_call_timestamps.append(now_ts)
+
     if not ANTHROPIC_API_KEY:
         return jsonify({'error': 'ANTHROPIC_API_KEY not configured on server'}), 503
     try:
@@ -91,9 +104,11 @@ def proxy_claude():
         prompt = body.get('prompt', '')
         if not prompt:
             return jsonify({'error': 'prompt required'}), 400
-        model = body.get('model', 'claude-sonnet-4-20250514')
+        model = body.get('model', 'claude-haiku-4-5-20251001')
         max_tokens = int(body.get('max_tokens', 400))
-        web_search = bool(body.get('web_search', True))
+        web_search = bool(body.get('web_search', False))
+
+        log.info('claude call | model=%s search=%s prompt=%.80s', model, web_search, prompt)
 
         payload = {
             'model': model,
@@ -104,7 +119,7 @@ def proxy_claude():
             payload['tools'] = [{
                 'type': 'web_search_20250305',
                 'name': 'web_search',
-                'max_uses': 3,
+                'max_uses': 1,
             }]
 
         r = requests.post(
